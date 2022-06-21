@@ -79,47 +79,67 @@ class InputFeatures(object):
         self.label_masks = label_masks
 
 
-def convert_examples_to_features(examples, tokenizer, max_seq_length, verbose_logging=False, logger=None):
+def convert_examples_to_features(examples, tokenizer, max_seq_length):
+    
+    #Get length in chars of maximum length term
     max_term_num = max([len(example.term_texts) for (example_index, example) in enumerate(examples)])
     max_sent_length, max_term_length = 0, 0
 
     unique_id = 1000000000
     features = []
     for (example_index, example) in enumerate(examples):
+        # contains start position (in subtoken list) of each token
         tok_to_orig_index = []
+        # contains the token index of each subtoken
         orig_to_tok_index = []
         all_doc_tokens = []
+        
+        # Iterate each token
         for (i, token) in enumerate(example.sent_tokens):
+            # Index of original token
             orig_to_tok_index.append(len(all_doc_tokens))
+            # Retokenize (tokens so far only splitted by whitespace)
             sub_tokens = tokenizer.tokenize(token)
+
             for sub_token in sub_tokens:
+                # Get index to map original token
                 tok_to_orig_index.append(i)
                 all_doc_tokens.append(sub_token)
+        
+        # Max sentence lenght in subtoken!
         if len(all_doc_tokens) > max_sent_length:
             max_sent_length = len(all_doc_tokens)
 
         tok_start_positions = []
         tok_end_positions = []
-        for start_position, end_position in \
-                zip(example.start_positions, example.end_positions):
+
+        # Now must map new positions to tokens
+        for start_position, end_position in zip(example.start_positions, example.end_positions):
+            #Start position is the original one
             tok_start_position = orig_to_tok_index[start_position]
+
             if end_position < len(example.sent_tokens) - 1:
                 tok_end_position = orig_to_tok_index[end_position + 1] - 1
+            # Easy case: last element, must also be last element of new list
             else:
                 tok_end_position = len(all_doc_tokens) - 1
             tok_start_positions.append(tok_start_position)
             tok_end_positions.append(tok_end_position)
 
+        
         # Account for [CLS] and [SEP] with "- 2"
+        # Cuts sentence if too long
         if len(all_doc_tokens) > max_seq_length - 2:
             all_doc_tokens = all_doc_tokens[0:(max_seq_length - 2)]
 
         tokens = []
         token_to_orig_map = {}
         segment_ids = []
+
+        # Start sentence and 0
         tokens.append("[CLS]")
         segment_ids.append(0)
-
+        # Apparently segment is always 0
         for index, token in enumerate(all_doc_tokens):
             token_to_orig_map[len(tokens)] = tok_to_orig_index[index]
             tokens.append(token)
@@ -130,6 +150,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, verbose_lo
         input_ids = tokenizer.convert_tokens_to_ids(tokens)
         input_mask = [1] * len(input_ids)
 
+        # 0 is apparetly a filler id for the token
         while len(input_ids) < max_seq_length:
             input_ids.append(0)
             input_mask.append(0)
@@ -139,28 +160,38 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, verbose_lo
         assert len(input_mask) == max_seq_length
         assert len(segment_ids) == max_seq_length
 
+
         # For distant supervision, we annotate the positions of all answer spans
         start_positions = [0] * len(input_ids)
         end_positions = [0] * len(input_ids)
         bio_labels = [0] * len(input_ids)
         polarity_positions = [0] * len(input_ids)
         start_indexes, end_indexes = [], []
+
         for tok_start_position, tok_end_position, polarity in zip(tok_start_positions, tok_end_positions, example.polarities):
+            # This should always happen!
             if (tok_start_position >= 0 and tok_end_position <= (max_seq_length - 1)):
+                # Effective start position due to CLS
                 start_position = tok_start_position + 1   # [CLS]
                 end_position = tok_end_position + 1   # [CLS]
+                # ???
                 start_positions[start_position] = 1
                 end_positions[end_position] = 1
                 start_indexes.append(start_position)
                 end_indexes.append(end_position)
+                # Recompute terms
                 term_length = tok_end_position - tok_start_position + 1
                 max_term_length = term_length if term_length > max_term_length else max_term_length
                 bio_labels[start_position] = 1  # 'B'
+                
+                #
                 if start_position < end_position:
                     for idx in range(start_position + 1, end_position + 1):
                         bio_labels[idx] = 2  # 'I'
                 for idx in range(start_position, end_position + 1):
                     polarity_positions[idx] = label_to_id[polarity]
+            else:
+                assert False, '{},{}'.format(tok_start_position, tok_end_position)
 
         polarity_labels = [label_to_id[polarity] for polarity in example.polarities]
         label_masks = [1] * len(polarity_labels)
@@ -175,18 +206,6 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, verbose_lo
         assert len(end_indexes) == max_term_num
         assert len(polarity_labels) == max_term_num
         assert len(label_masks) == max_term_num
-
-        if example_index < 1 and verbose_logging:
-            logger.info("*** Example ***")
-            logger.info("unique_id: %s" % (unique_id))
-            logger.info("example_index: %s" % (example_index))
-            logger.info("tokens: {}".format(tokens))
-            logger.info("token_to_orig_map: {}".format(token_to_orig_map))
-            logger.info("start_indexes: {}".format(start_indexes))
-            logger.info("end_indexes: {}".format(end_indexes))
-            logger.info("bio_labels: {}".format(bio_labels))
-            logger.info("polarity_positions: {}".format(polarity_positions))
-            logger.info("polarity_labels: {}".format(polarity_labels))
 
         features.append(
             InputFeatures(
@@ -206,9 +225,6 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length, verbose_lo
                 polarity_labels=polarity_labels,
                 label_masks=label_masks))
         unique_id += 1
-    logger.info("Max sentence length: {}".format(max_sent_length))
-    logger.info("Max term length: {}".format(max_term_length))
-    logger.info("Max term num: {}".format(max_term_num))
     return features
 
 
@@ -434,7 +450,7 @@ def pos2term(words, starts, ends):
     return term_texts
 
 
-def convert_absa_data(dataset, verbose_logging=False):
+def convert_absa_data(dataset):
     examples = []
     n_records = len(dataset)
     for i in range(n_records):
@@ -459,8 +475,7 @@ def convert_absa_data(dataset, verbose_logging=False):
             assert len(term_texts) == len(new_polarities)
             example = SemEvalExample(str(i), words, term_texts, starts, ends, new_polarities)
             examples.append(example)
-            if i < 50 and verbose_logging:
-                print(example)
+
     print("Convert %s examples" % len(examples))
     return examples
 

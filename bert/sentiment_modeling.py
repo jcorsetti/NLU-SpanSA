@@ -243,6 +243,8 @@ class BertForSpanAspectExtraction(nn.Module):
         self.bert = BertModel(config)
         # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        # Regress end and start of aspect from bert embeddings
         self.qa_outputs = nn.Linear(config.hidden_size, 2)
 
         def init_weights(module):
@@ -280,9 +282,14 @@ class BertForSpanAspectClassification(nn.Module):
         self.bert = BertModel(config)
         # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        
         self.activation = nn.Tanh()
+        
+        # (Wv) Affine used before classifier
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        # (Wa) Learnable vector used within attention 
         self.affine = nn.Linear(config.hidden_size, 1)
+        # (Wp) Final classifier 
         self.classifier = nn.Linear(config.hidden_size, 5)
 
         def init_weights(module):
