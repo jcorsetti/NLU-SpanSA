@@ -1,7 +1,6 @@
-import bert.tokenization as tokenization
 import os
 import numpy as np
-
+import torch
 
 def read_data(path, allowed_tags=['T-NEU','T-POS','T-NEG','O']):
     
@@ -20,7 +19,7 @@ def read_data(path, allowed_tags=['T-NEU','T-POS','T-NEG','O']):
             tagged_tokens = annot.split(' ')
             # Iterate over each annotated token
             for tagged_token in tagged_tokens:
-                #print(tagged_token.split('='))
+
                 elems = tagged_token.split('=')
                 # Sometimes '=' character is present in the sentence. This breaks the parsing
                 if len(elems) == 2:
@@ -107,7 +106,7 @@ def format_features(dataset, tokenizer, max_sequence_size=96) :
 
     new_dataset = []
 
-    for sample in dataset:
+    for idx_sample, sample in enumerate(dataset):
         # start position in subtoken list for each token
         token_to_subtoken = [] # equal to number of tokens
         # relative token position of each subtoken
@@ -174,13 +173,13 @@ def format_features(dataset, tokenizer, max_sequence_size=96) :
 
         new_dataset.append({
             'sentence' : sample['sentence'],
-            'sentence_id' : sample['sentence_id'],
+            'sentence_id' : idx_sample,
             'tokens' : sample['words'],
             'subtokens_map' : subtoken_to_token_map,
             'subtokens' : all_subtokens,
             'subtokens_id' : tokens_id,
             'subtokens_mask' : tokens_mask,
-            'segment_id' : segment_id,
+            'segments_id' : segment_id,
             'start_span' : start_pos,
             'end_span' : end_pos,
             'polarity' : polarity,
@@ -189,23 +188,88 @@ def format_features(dataset, tokenizer, max_sequence_size=96) :
 
     return new_dataset
 
+def span_bound2position(span, mask, max_seq_len=96):
+    '''
+    span: [B, N] tensor, contains start or end indexes of up to N spans
+    mask: [B] tensor, binary mask describing validity of the N spans
+    
+    Returns a [B, max_seq_len] binary mask tensor, with 1 at positions in which the span starts/ends.
+    This is necessary to compute the cross entropy loss
+    '''
 
+    BS = mask.shape[0]
+    positions = torch.zeros((BS,max_seq_len)).to(mask.device)
+    batch_idx, span_idx = torch.nonzero(mask == 1, as_tuple=True)    
+    positions[batch_idx, span[batch_idx, span_idx]] = 1.
 
-PATH='data/absa/laptop14_train.txt'
-MODEL = 'bert_models/bert-base-uncased'
-DICT = {
-    'T-NEU' : 0,
-    'T-POS' : 1,
-    'T-NEG' : 2
-}
+    return positions
 
+def heuristic_multispan(start_logits, end_logits, M=20, K=9, T=8.):
+    '''
+    THIS IS O(B*N*N!)
+    start_logits, end_logits: [B,L] tensor with scores (before softmax)
+    K: maximum number of aspect per sentence
+    M: only top M spans are considered
+    T: threshold for accepting span
+    '''
 
-tokenizer = tokenization.FullTokenizer(vocab_file=os.path.join(MODEL,'vocab.txt'), do_lower_case=True)
+    B,L = start_logits.shape
+    final_start = torch.zeros(B,K)
+    final_end = torch.zeros(B,K)
+    mask = torch.zeros(B,K)
+    # must iterate over batches
+    
+    for i_b in range(B):
+        cur_start, cur_end = start_logits[i_b], end_logits[i_b]
+        # get topK candidates
+        best_start = torch.argsort(cur_start, descending=True)[:M]
+        best_end = torch.argsort(cur_end, descending=True)[:M]
+        # list of scores and accepted spans 
+        score, filtered = [], []
+        
+        # iterate over possible spans
+        for i_s in best_start:
+            for i_e in best_end:
+                # calculate score and lenght
+                cur_score = cur_start[i_s] + cur_end[i_e]
+                cur_lenght = i_e - i_s + 1
+                
+                # score must be of a certain threshold, and end must be before start
+                if i_s <= i_e and cur_score >= T:
+                    score.append(cur_score.item() - cur_lenght.item())
+                    filtered.append((i_s.item(), i_e.item()))
+                    print('Accepted span ({},{}) with score {}!'.format(i_s,i_e,cur_score-cur_lenght))
 
+        accepted = 0
+        # NMS part!
 
-dataset = read_data(PATH)
-new_dataset = format_annotations(dataset, tag_dict=DICT, filter_empty=True)
-formatted_dataset = format_features(new_dataset, tokenizer)
+        while (filtered != []) and (accepted < K):
+            # get best span, remove score and index
+            best_idx = score.index(max(score))
+            best_span = filtered[best_idx]
+            score.pop(best_idx)
+            filtered.pop(best_idx)
 
-for k, v in formatted_dataset[17].items():
-    print(k, v)
+            # update final span list
+            final_start[i_b, accepted] = best_span[0]
+            final_end[i_b, accepted] = best_span[1]
+            mask[i_b, accepted] = 1
+            accepted += 1
+
+            # removing spans overlapping with the best one found
+            tmp_score, tmp_filtered = [], []
+            for i, span in enumerate(filtered):
+                if not span_overlap(best_span, span):
+                    tmp_score.append(score[i])
+                    tmp_filtered.append(span)
+            filtered, score = tmp_filtered, tmp_score
+    
+    return final_start, final_end, mask
+
+def span_overlap(seq1, seq2):
+    '''
+    Return True if two sequences overlap
+    '''
+    s1,e1 = seq1
+    s2,e2 = seq2
+    return not (s2 > e1 or s1 > e2)

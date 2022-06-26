@@ -97,6 +97,8 @@ def distant_cross_entropy(logits, positions, mask=None):
     '''
     log_softmax = nn.LogSoftmax(dim=-1)
     log_probs = log_softmax(logits)
+    positions = positions.to(dtype=log_probs.dtype)
+    
     if mask is not None:
         loss = -1 * torch.mean(torch.sum(positions.to(dtype=log_probs.dtype) * log_probs, dim=-1) /
                                (torch.sum(positions.to(dtype=log_probs.dtype), dim=-1) + mask.to(dtype=log_probs.dtype)))

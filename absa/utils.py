@@ -263,6 +263,7 @@ def wrapped_get_final_text(example, feature, start_index, end_index, do_lower_ca
     return final_text
 
 
+# Predicted are NOT used when training is TRUE!
 def span_annotate_candidates(all_examples, batch_features, batch_results, filter_type, is_training, use_heuristics, use_nms,
                              logit_threshold, n_best_size, max_answer_length, do_lower_case, verbose_logging, logger):
     """Annotate top-k candidate answers into features."""
@@ -282,12 +283,12 @@ def span_annotate_candidates(all_examples, batch_features, batch_results, filter
         seen_predictions = {}
         span_starts, span_ends, labels, label_masks = [], [], [], []
         if is_training:
-            # add ground-truth terms
-            for start_index, end_index, polarity_label, mask in \
-                    zip(feature.start_indexes, feature.end_indexes, feature.polarity_labels, feature.label_masks):
+            # iterating over annotations to get what? We already have the polarity annotations
+            for start_index, end_index, polarity_label, mask in zip(feature.start_indexes, feature.end_indexes, feature.polarity_labels, feature.label_masks):
+                
                 if mask and start_index in feature.token_to_orig_map and end_index in feature.token_to_orig_map:
-                    final_text = wrapped_get_final_text(example, feature, start_index, end_index,
-                                                        do_lower_case, verbose_logging, logger)
+                    
+                    final_text = wrapped_get_final_text(example, feature, start_index, end_index, do_lower_case, verbose_logging, logger)
                     if final_text in seen_predictions:
                         continue
                     seen_predictions[final_text] = True

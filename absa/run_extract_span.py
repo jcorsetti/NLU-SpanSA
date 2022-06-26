@@ -58,7 +58,7 @@ def read_train_data(args, tokenizer, logger):
     train_features = convert_examples_to_features(train_examples, tokenizer, args.max_seq_length,
                                                   args.verbose_logging, logger)
 
-    num_train_steps = int(
+    num_train_steps = int(                #print(tagged_token.split('='))
         len(train_features) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
     logger.info("Num orig examples = %d", len(train_examples))
     logger.info("Num split features = %d", len(train_features))
